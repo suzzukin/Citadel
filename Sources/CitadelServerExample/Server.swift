@@ -1,7 +1,8 @@
 import Citadel
 import Crypto
 import Foundation
-import NIO
+import NIOCore
+import NIOPosix
 import NIOSSH
 
 @main struct ExampleSSHServer {

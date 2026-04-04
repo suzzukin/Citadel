@@ -12,7 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 import Foundation
-import NIO
+import NIOCore
+import NIOPosix
 import NIOSSH
 import Citadel
 

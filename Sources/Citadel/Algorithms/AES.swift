@@ -1,7 +1,8 @@
 import CCryptoBoringSSL
 import Foundation
 import Crypto
-import NIO
+import NIOCore
+import NIOPosix
 import NIOSSH
 
 public final class AES128CTR: NIOSSHTransportProtection {

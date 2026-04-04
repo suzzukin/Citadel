@@ -1,4 +1,5 @@
-import NIO
+import NIOCore
+import NIOPosix
 
 struct SFTPMessageParser: ByteToMessageDecoder {
     typealias InboundOut = SFTPMessage

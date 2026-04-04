@@ -1,4 +1,5 @@
-import NIO
+import NIOCore
+import NIOPosix
 import Logging
 
 /// A "handle" for accessing a file that has been successfully opened on an SFTP server. File handles support

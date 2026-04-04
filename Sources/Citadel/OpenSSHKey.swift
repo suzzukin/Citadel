@@ -1,7 +1,8 @@
 import CCryptoBoringSSL
 import BigInt
 import Foundation
-import NIO
+import NIOCore
+import NIOPosix
 import Crypto
 import CCitadelBcrypt
 import NIOSSH

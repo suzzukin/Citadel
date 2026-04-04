@@ -1,5 +1,6 @@
 import Foundation
-import NIO
+import NIOCore
+import NIOPosix
 @preconcurrency import NIOSSH
 
 /// A channel handler that manages TTY (terminal) input/output for SSH command execution.
