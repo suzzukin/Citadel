@@ -6,6 +6,7 @@ import NIOSSH
 import CCryptoBoringSSL
 import Foundation
 import Crypto
+import _CryptoExtras
 
 extension Insecure {
     public enum RSA {}
@@ -291,6 +292,42 @@ extension Insecure.RSA {
             CCryptoBoringSSL_BN_bn2bin(secret, &array)
             return Data(array)
         }
+    }
+}
+
+// MARK: - Conversion to _CryptoExtras RSA (for NIO-SSH built-in RSA-SHA2)
+
+extension Insecure.RSA.PrivateKey {
+    /// Converts this BoringSSL-based RSA key to a `_CryptoExtras` RSA key,
+    /// enabling rsa-sha2-256/512 signatures via NIO-SSH's built-in RSA support.
+    public func toCryptoExtrasKey() throws -> _RSA.Signing.PrivateKey {
+        // Serialize to PKCS#1 DER via BoringSSL
+        let rsaCtx = CCryptoBoringSSL_RSA_new()!
+        defer { CCryptoBoringSSL_RSA_free(rsaCtx) }
+
+        let n = CCryptoBoringSSL_BN_new()!
+        let e = CCryptoBoringSSL_BN_new()!
+        let d = CCryptoBoringSSL_BN_new()!
+
+        CCryptoBoringSSL_BN_copy(n, self._publicKey.modulus)
+        CCryptoBoringSSL_BN_copy(e, self._publicKey.publicExponent)
+        CCryptoBoringSSL_BN_copy(d, self.privateExponent)
+
+        guard CCryptoBoringSSL_RSA_set0_key(rsaCtx, n, e, d) == 1 else {
+            throw CitadelError.signingError
+        }
+
+        // Get DER size
+        let derLen = CCryptoBoringSSL_i2d_RSAPrivateKey(rsaCtx, nil)
+        guard derLen > 0 else { throw CitadelError.signingError }
+
+        // Serialize to DER
+        var derBytes = [UInt8](repeating: 0, count: Int(derLen))
+        var derPtr: UnsafeMutablePointer<UInt8>? = UnsafeMutablePointer(&derBytes)
+        let written = CCryptoBoringSSL_i2d_RSAPrivateKey(rsaCtx, &derPtr)
+        guard written > 0 else { throw CitadelError.signingError }
+
+        return try _RSA.Signing.PrivateKey(derRepresentation: derBytes)
     }
 }
 
