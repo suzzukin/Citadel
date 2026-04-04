@@ -41,9 +41,15 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
     /// - Parameters: 
     /// - username: The username to authenticate with.
     /// - privateKey: The private key to authenticate with.
+    /// Creates RSA key authentication using Citadel's legacy ssh-rsa (SHA-1).
+    public static func rsa(username: String, privateKey: Insecure.RSA.PrivateKey) -> SSHAuthenticationMethod {
+        return SSHAuthenticationMethod(username: username, offer: .privateKey(.init(privateKey: .init(custom: privateKey))))
+    }
+
     /// Creates RSA key authentication using rsa-sha2-512/256 (RFC 8332).
     /// Uses NIO-SSH built-in RSA with proper SHA-2 signature negotiation.
-    public static func rsa(username: String, privateKey: _RSA.Signing.PrivateKey) -> SSHAuthenticationMethod {
+    /// Requires `_RSA.Signing.PrivateKey` from _CryptoExtras with full CRT params.
+    public static func rsaSHA2(username: String, privateKey: _RSA.Signing.PrivateKey) -> SSHAuthenticationMethod {
         return SSHAuthenticationMethod(username: username, offer: .privateKey(.init(privateKey: .init(rsaKey: privateKey))))
     }
     
