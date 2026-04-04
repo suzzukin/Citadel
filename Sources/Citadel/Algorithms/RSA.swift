@@ -301,33 +301,67 @@ extension Insecure.RSA.PrivateKey {
     /// Converts this BoringSSL-based RSA key to a `_CryptoExtras` RSA key,
     /// enabling rsa-sha2-256/512 signatures via NIO-SSH's built-in RSA support.
     public func toCryptoExtrasKey() throws -> _RSA.Signing.PrivateKey {
-        // Serialize to PKCS#1 DER via BoringSSL
-        let rsaCtx = CCryptoBoringSSL_RSA_new()!
-        defer { CCryptoBoringSSL_RSA_free(rsaCtx) }
-
-        let n = CCryptoBoringSSL_BN_new()!
-        let e = CCryptoBoringSSL_BN_new()!
-        let d = CCryptoBoringSSL_BN_new()!
-
-        CCryptoBoringSSL_BN_copy(n, self._publicKey.modulus)
-        CCryptoBoringSSL_BN_copy(e, self._publicKey.publicExponent)
-        CCryptoBoringSSL_BN_copy(d, self.privateExponent)
-
-        guard CCryptoBoringSSL_RSA_set0_key(rsaCtx, n, e, d) == 1 else {
-            throw CitadelError.signingError
+        // Extract raw bytes from BIGNUMs
+        func bnToData(_ bn: UnsafeMutablePointer<BIGNUM>) -> Data {
+            let numBytes = Int(CCryptoBoringSSL_BN_num_bytes(bn))
+            var bytes = [UInt8](repeating: 0, count: numBytes)
+            CCryptoBoringSSL_BN_bn2bin(bn, &bytes)
+            return Data(bytes)
         }
 
-        // Get DER size
-        let derLen = CCryptoBoringSSL_i2d_RSAPrivateKey(rsaCtx, nil)
-        guard derLen > 0 else { throw CitadelError.signingError }
+        let n = bnToData(self._publicKey.modulus)
+        let e = bnToData(self._publicKey.publicExponent)
+        let d = bnToData(self.privateExponent)
 
-        // Serialize to DER
-        var derBytes = [UInt8](repeating: 0, count: Int(derLen))
-        var derPtr: UnsafeMutablePointer<UInt8>? = UnsafeMutablePointer(&derBytes)
-        let written = CCryptoBoringSSL_i2d_RSAPrivateKey(rsaCtx, &derPtr)
-        guard written > 0 else { throw CitadelError.signingError }
+        // Build PKCS#1 DER with only n, e, d (no CRT params)
+        // RSAPrivateKey ::= SEQUENCE {
+        //   version INTEGER (0),
+        //   modulus INTEGER,
+        //   publicExponent INTEGER,
+        //   privateExponent INTEGER,
+        //   prime1 INTEGER (0 - placeholder),
+        //   prime2 INTEGER (0 - placeholder),
+        //   exponent1 INTEGER (0 - placeholder),
+        //   exponent2 INTEGER (0 - placeholder),
+        //   coefficient INTEGER (0 - placeholder)
+        // }
+        func derInteger(_ data: Data) -> Data {
+            var bytes = Array(data)
+            // Prepend 0x00 if high bit set (positive integer)
+            if let first = bytes.first, first & 0x80 != 0 {
+                bytes.insert(0x00, at: 0)
+            }
+            return derTLV(tag: 0x02, content: Data(bytes))
+        }
 
-        return try _RSA.Signing.PrivateKey(derRepresentation: derBytes)
+        func derTLV(tag: UInt8, content: Data) -> Data {
+            var result = Data([tag])
+            let len = content.count
+            if len < 128 {
+                result.append(UInt8(len))
+            } else if len < 256 {
+                result.append(contentsOf: [0x81, UInt8(len)])
+            } else {
+                result.append(contentsOf: [0x82, UInt8(len >> 8), UInt8(len & 0xFF)])
+            }
+            result.append(content)
+            return result
+        }
+
+        let zeroInt = derInteger(Data([0]))
+        var body = Data()
+        body.append(zeroInt)            // version = 0
+        body.append(derInteger(n))      // modulus
+        body.append(derInteger(e))      // publicExponent
+        body.append(derInteger(d))      // privateExponent
+        body.append(zeroInt)            // prime1 (placeholder)
+        body.append(zeroInt)            // prime2 (placeholder)
+        body.append(zeroInt)            // exponent1 (placeholder)
+        body.append(zeroInt)            // exponent2 (placeholder)
+        body.append(zeroInt)            // coefficient (placeholder)
+
+        let der = derTLV(tag: 0x30, content: body) // SEQUENCE
+        return try _RSA.Signing.PrivateKey(derRepresentation: der)
     }
 }
 
