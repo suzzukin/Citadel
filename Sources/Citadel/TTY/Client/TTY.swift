@@ -367,7 +367,7 @@ extension SSHClient {
         )
 
         func close() async throws {
-            try await channel.close()
+            try await channel.closeUnlessClosed()
         }
 
         do {
@@ -408,9 +408,9 @@ extension SSHClient {
 
         do {
             try await perform(TTYOutput(sequence: output), TTYStdinWriter(channel: channel))
-            try await channel.close()
+            try await channel.closeUnlessClosed()
         } catch {
-            try await channel.close()
+            try await channel.closeUnlessClosed()
             throw error
         }
     }
@@ -451,7 +451,7 @@ extension SSHClient {
         )
 
         func close() async throws {
-            try await channel.close()
+            try await channel.closeUnlessClosed()
         }
 
         do {
@@ -508,7 +508,7 @@ extension SSHClient {
         )
 
         func close() async throws {
-            try await channel.close()
+            try await channel.closeUnlessClosed()
         }
 
         do {
@@ -586,5 +586,21 @@ extension SSHClient {
         }
         
         return ExecCommandStream(stdout: stdout, stderr: stderr)
+    }
+}
+
+extension Channel {
+    /// Closes the channel; one the server closed already counts as closed.
+    ///
+    /// When the remote program exits, the server closes the channel and the
+    /// output stream ends; closing it again then fails with
+    /// `ChannelError.alreadyClosed`. Without this, that error replaced both a
+    /// clean exit and the `CommandFailed` the stream had thrown.
+    func closeUnlessClosed() async throws {
+        do {
+            try await close()
+        } catch ChannelError.alreadyClosed {
+            return
+        }
     }
 }

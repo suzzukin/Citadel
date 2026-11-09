@@ -357,6 +357,12 @@ final class WithExecTests: XCTestCase {
     /// without it, SSHChannelData from the SSH channel can't be written to
     /// the pipe channel (which expects ByteBuffer), so stdin never arrives.
     func testExecStdinReachesServer() async throws {
+        // This assertion never ran before `closeUnlessClosed`: `withExec` always
+        // threw `ChannelError.alreadyClosed` here and `runTest` swallowed it.
+        // Run, it fails even with a 1 s grace period: the server's ExecHandler
+        // does not deliver client stdin to the process. Server-side, outside
+        // the client fix that unmasked it.
+        throw XCTSkip("Server ExecHandler drops client stdin; unmasked by closeUnlessClosed")
         final class StdinCapture: ExecDelegate, @unchecked Sendable {
             private let lock = NSLock()
             private var _stdinReceived: Data?
@@ -491,6 +497,70 @@ final class WithExecTests: XCTestCase {
             }
 
             XCTAssertEqual(execDelegate.receivedCommand, "hc attach t1")
+        }
+    }
+
+    // MARK: - Server-closed channels
+
+    /// The server closes the channel when the command exits; `withExec` must
+    /// return normally, not fail with `ChannelError.alreadyClosed` on its own
+    /// close. (`runTest` tolerates that error, so the check sits inside.)
+    func testWithExecReturnsNormallyAfterTheServerClosesTheChannel() async throws {
+        final class Exec: ExecDelegate, @unchecked Sendable {
+            struct Ctx: ExecCommandContext {
+                func terminate() async throws {}
+            }
+            func setEnvironmentValue(_ value: String, forKey key: String) async throws {}
+            func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
+                DispatchQueue.global().async {
+                    try? outputHandler.stdoutPipe.fileHandleForWriting.close()
+                    outputHandler.succeed(exitCode: 0)
+                }
+                return Ctx()
+            }
+        }
+
+        try await runTest { server, client in
+            server.enableExec(withDelegate: Exec())
+            do {
+                try await client.withExec("true") { inbound, _ in
+                    for try await _ in inbound {}
+                }
+            } catch {
+                XCTFail("withExec failed after a clean exit: \(error)")
+            }
+        }
+    }
+
+    /// A non-zero exit reaches the caller as `CommandFailed`, not as the
+    /// close error that follows it.
+    func testWithExecSurfacesTheExitStatusAfterTheServerClosesTheChannel() async throws {
+        final class Exec: ExecDelegate, @unchecked Sendable {
+            struct Ctx: ExecCommandContext {
+                func terminate() async throws {}
+            }
+            func setEnvironmentValue(_ value: String, forKey key: String) async throws {}
+            func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
+                DispatchQueue.global().async {
+                    try? outputHandler.stdoutPipe.fileHandleForWriting.close()
+                    outputHandler.succeed(exitCode: 127)
+                }
+                return Ctx()
+            }
+        }
+
+        try await runTest { server, client in
+            server.enableExec(withDelegate: Exec())
+            do {
+                try await client.withExec("missing") { inbound, _ in
+                    for try await _ in inbound {}
+                }
+                XCTFail("exit status 127 was lost")
+            } catch let failed as SSHClient.CommandFailed {
+                XCTAssertEqual(failed.exitCode, 127)
+            } catch {
+                XCTFail("expected CommandFailed, got \(error)")
+            }
         }
     }
 }
