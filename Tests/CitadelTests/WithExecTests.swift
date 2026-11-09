@@ -440,4 +440,57 @@ final class WithExecTests: XCTestCase {
             XCTAssertEqual(execDelegate.receivedEnv["BAZ"], "qux")
         }
     }
+
+    // MARK: - withPTY(_:command:)
+
+    /// A PTY session with a command goes out as an exec request: the server's exec
+    /// delegate receives the command (no shell is configured, so a shell request
+    /// would fail the channel) and its output reaches the client.
+    func testWithPTYCommandRunsCommandViaExec() async throws {
+        final class Exec: ExecDelegate, @unchecked Sendable {
+            struct Ctx: ExecCommandContext {
+                func terminate() async throws {}
+            }
+            var receivedCommand: String?
+            func setEnvironmentValue(_ value: String, forKey key: String) async throws {}
+            func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
+                receivedCommand = command
+                DispatchQueue.global().async {
+                    let output = outputHandler.stdoutPipe.fileHandleForWriting
+                    output.write(Data("attached".utf8))
+                    try? output.close()
+                    // Let NIO drain the pipe before succeed triggers pipeChannel.close
+                    Thread.sleep(forTimeInterval: 0.3)
+                    outputHandler.succeed(exitCode: 0)
+                }
+                return Ctx()
+            }
+        }
+
+        try await runTest { server, client in
+            let execDelegate = Exec()
+            server.enableExec(withDelegate: execDelegate)
+
+            let request = SSHChannelRequestEvent.PseudoTerminalRequest(
+                wantReply: true,
+                term: "xterm-256color",
+                terminalCharacterWidth: 80,
+                terminalRowHeight: 24,
+                terminalPixelWidth: 0,
+                terminalPixelHeight: 0,
+                terminalModes: SSHTerminalModes([:])
+            )
+            try await client.withPTY(request, command: "hc attach t1") { inbound, _ in
+                var collected = ByteBuffer()
+                for try await chunk in inbound {
+                    if case .stdout(let buf) = chunk {
+                        collected.writeImmutableBuffer(buf)
+                    }
+                }
+                XCTAssertEqual(String(buffer: collected), "attached")
+            }
+
+            XCTAssertEqual(execDelegate.receivedCommand, "hc attach t1")
+        }
+    }
 }

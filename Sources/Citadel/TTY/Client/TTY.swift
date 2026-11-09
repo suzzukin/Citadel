@@ -265,6 +265,8 @@ extension SSHClient {
 
     enum CommandMode {
         case pty(SSHChannelRequestEvent.PseudoTerminalRequest), tty(command: String?), command(String)
+        /// A pseudo-terminal running `command` via an exec request instead of the login shell.
+        case ptyCommand(SSHChannelRequestEvent.PseudoTerminalRequest, command: String)
     }
 
     internal func _executeCommandStream(
@@ -336,6 +338,12 @@ extension SSHClient {
                 command: command,
                 wantReply: true
             ))
+        case .ptyCommand(let request, let command):
+            try await channel.triggerUserOutboundEvent(request)
+            try await channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(
+                command: command,
+                wantReply: true
+            ))
         }
         
         return (channel, stream)
@@ -368,6 +376,41 @@ extension SSHClient {
             try await close()
         } catch {
             try await close()
+            throw error
+        }
+    }
+
+    /// Creates a pseudo-terminal (PTY) session running `command` instead of the login shell
+    ///
+    /// Sends a `pty-req` followed by an `exec` request (RFC 4254 §6.2, §6.5), the
+    /// channel-level equivalent of `ssh -t host command`. The remote program sees a
+    /// real terminal (so full-screen and raw-mode programs work), and window-change
+    /// requests sent through `TTYStdinWriter.changeSize` reach it. The channel closes
+    /// when `command` exits; no shell startup files run and nothing is echoed first.
+    ///
+    /// - Parameters:
+    ///   - request: PTY configuration parameters
+    ///   - command: The command line to execute, interpreted by the user's login shell on the server
+    ///   - environment: Environment variables to set first. This requires `PermitUserEnvironment` (or a matching `AcceptEnv`) on the server.
+    ///   - perform: Closure that receives the PTY's input/output streams
+    /// - Throws: Any errors that occur during PTY setup or operation
+    @available(macOS 15.0, *)
+    public func withPTY(
+        _ request: SSHChannelRequestEvent.PseudoTerminalRequest,
+        command: String,
+        environment: [SSHChannelRequestEvent.EnvironmentRequest] = [],
+        perform: (_ inbound: TTYOutput, _ outbound: TTYStdinWriter) async throws -> Void
+    ) async throws {
+        let (channel, output) = try await _executeCommandStream(
+            environment: environment,
+            mode: .ptyCommand(request, command: command)
+        )
+
+        do {
+            try await perform(TTYOutput(sequence: output), TTYStdinWriter(channel: channel))
+            try await channel.close()
+        } catch {
+            try await channel.close()
             throw error
         }
     }
